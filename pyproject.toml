@@ -1,0 +1,40 @@
+[project]
+name = "simple-location-app"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "DeAngelo Floyd",email = "135054919+delonius22@users.noreply.github.com"}
+]
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "annotated-types (==0.7.0)",
+    "cffi (==1.17.1)",
+    "cryptography (==44.0.2)",
+    "numpy (==2.2.4)",
+    "pandas (==2.2.3)",
+    "pycparser (==2.22)",
+    "pydantic-core (==2.33.0)",
+    "pydantic-settings (==2.8.1)",
+    "pydantic (==2.11.1)",
+    "python-dateutil (==2.9.0.post0)",
+    "python-dotenv (==1.1.0)",
+    "pytz (==2025.1)",
+    "six (==1.17.0)",
+    "typing-extensions (==4.13.0)",
+    "typing-inspection (==0.4.0)",
+    "tzdata (==2025.2)",
+    "sqlalchemy (>=2.0.40,<3.0.0)",
+    "scipy (>=1.15.2,<2.0.0)",
+    "scikit-learn (>=1.6.1,<2.0.0)",
+    "folium (>=0.19.5,<0.20.0)",
+    "ipython (>=9.0.2,<10.0.0)"
+]
+
+[tool.poetry]
+packages = [{include = "simple_location_app", from = "src"}]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
