@@ -121,7 +121,7 @@ def visualize_locations_and_anomalies(data_df, save_path="user_location_analysis
         fig = make_subplots(
             rows=2, cols=1,
             subplot_titles=("User Login Locations", "Anomaly Scores Over Time"),
-            specs=[[{"type": "mapbox"}], [{"type": "scatter"}]],
+            specs=[[{"type": "scattergeo"}], [{"type": "scatter"}]],
             vertical_spacing=0.1,
             row_heights=[0.7, 0.3]
         )
@@ -134,7 +134,7 @@ def visualize_locations_and_anomalies(data_df, save_path="user_location_analysis
         # Add normal login points
         if len(normal_logins) > 0:
             fig.add_trace(
-                go.Scattermapbox(
+                go.Scattergeo(
                     lat=normal_logins['latitude'],
                     lon=normal_logins['longitude'],
                     mode='markers',
@@ -153,7 +153,7 @@ def visualize_locations_and_anomalies(data_df, save_path="user_location_analysis
         # Add anomalous login points
         if len(anomalous_logins) > 0:
             fig.add_trace(
-                go.Scattermapbox(
+                go.Scattergeo(
                     lat=anomalous_logins['latitude'],
                     lon=anomalous_logins['longitude'],
                     mode='markers',
@@ -213,14 +213,28 @@ def visualize_locations_and_anomalies(data_df, save_path="user_location_analysis
         center_lat = float(display_df['latitude'].mean())
         center_lon = float(display_df['longitude'].mean())
         
-        # Update map layout
+        # Update geo layout
+        fig.update_geos(
+            projection_type="natural earth",
+            showcoastlines=True,
+            coastlinecolor="RebeccaPurple",
+            showland=True,
+            landcolor="LightGreen",
+            showocean=True,
+            oceancolor="LightBlue",
+            showlakes=True,
+            lakecolor="Blue",
+            showrivers=True,
+            rivercolor="Blue",
+            showcountries=True,
+            countrycolor="Black",
+            center=dict(lat=center_lat, lon=center_lon),
+            projection_scale=5  # Adjust based on data spread
+        )
+        
+        # Update overall layout
         fig.update_layout(
             title_text='User Login Locations and Anomaly Detection',
-            mapbox=dict(
-                style="carto-positron",  # or "open-street-map", "white-bg", "carto-darkmatter"
-                center=dict(lat=center_lat, lon=center_lon),
-                zoom=10
-            ),
             height=900,
             width=1000,
             legend=dict(
@@ -328,7 +342,7 @@ def create_user_cluster_analysis(data_df, save_path="user_cluster_analysis.html"
         # Create figure with subplots: map + timeline
         fig = make_subplots(
             rows=2, cols=1, 
-            specs=[[{"type": "mapbox"}], [{"type": "scatter"}]],
+            specs=[[{"type": "scattergeo"}], [{"type": "scatter"}]],
             vertical_spacing=0.1,
             subplot_titles=("User Login Locations by Cluster", "Login Activity Timeline"),
             row_heights=[0.7, 0.3]
@@ -363,7 +377,7 @@ def create_user_cluster_analysis(data_df, save_path="user_cluster_analysis.html"
             
             # Add user locations to map
             fig.add_trace(
-                go.Scattermapbox(
+                go.Scattergeo(
                     lat=user_data['latitude'],
                     lon=user_data['longitude'],
                     mode='markers',
@@ -401,14 +415,24 @@ def create_user_cluster_analysis(data_df, save_path="user_cluster_analysis.html"
         center_lat = float(data_df['latitude'].mean())
         center_lon = float(data_df['longitude'].mean())
         
-        # Update layout
+        # Update geo layout
+        fig.update_geos(
+            projection_type="natural earth",
+            showcoastlines=True,
+            coastlinecolor="RebeccaPurple",
+            showland=True,
+            landcolor="LightGreen",
+            showocean=True,
+            oceancolor="LightBlue",
+            showcountries=True,
+            countrycolor="Black",
+            center=dict(lat=center_lat, lon=center_lon),
+            projection_scale=5  # Adjust based on data spread
+        )
+        
+        # Update overall layout
         fig.update_layout(
             title_text='User Cluster Analysis and Anomaly Detection',
-            mapbox=dict(
-                style="carto-positron",
-                center=dict(lat=center_lat, lon=center_lon),
-                zoom=10
-            ),
             height=900,
             width=1000,
             legend=dict(
