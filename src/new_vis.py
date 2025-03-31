@@ -52,6 +52,30 @@ def visualize_robust(data_df, save_path="user_location_visualization.html"):
             data_df['anomaly_score'] = 0.0
             logger.info("Added default 'anomaly_score' column (all 0.0)")
         
+        # Make sure latitude and longitude are numeric and valid
+        try:
+            # Convert to numeric, coerce errors to NaN
+            data_df['latitude'] = pd.to_numeric(data_df['latitude'], errors='coerce')
+            data_df['longitude'] = pd.to_numeric(data_df['longitude'], errors='coerce')
+            
+            # Drop rows with NaN coordinates
+            invalid_rows = data_df[data_df['latitude'].isna() | data_df['longitude'].isna()].shape[0]
+            if invalid_rows > 0:
+                logger.warning(f"Dropping {invalid_rows} rows with invalid coordinates")
+                data_df = data_df.dropna(subset=['latitude', 'longitude'])
+            
+            # Validate coordinate ranges
+            data_df = data_df[(data_df['latitude'] >= -90) & (data_df['latitude'] <= 90) & 
+                              (data_df['longitude'] >= -180) & (data_df['longitude'] <= 180)]
+            logger.info(f"Valid coordinates for {len(data_df)} rows")
+            
+            if len(data_df) == 0:
+                logger.error("No rows with valid coordinates remain")
+                return None
+        except Exception as e:
+            logger.error(f"Error processing coordinates: {e}")
+            return None
+        
         # Calculate map center
         try:
             center_lat = float(data_df['latitude'].mean())
@@ -86,9 +110,18 @@ def visualize_robust(data_df, save_path="user_location_visualization.html"):
         try:
             for idx, row in data_df.iterrows():
                 try:
+                    # Skip rows with NaN coordinates (should be already handled above)
+                    if pd.isna(row['latitude']) or pd.isna(row['longitude']):
+                        continue
+                    
                     # Ensure numeric lat/lon values
                     lat = float(row['latitude'])
                     lon = float(row['longitude'])
+                    
+                    # Check for valid coordinate range
+                    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                        logger.warning(f"Skipping row {idx} with invalid coordinates: [{lat}, {lon}]")
+                        continue
                     
                     # Convert timestamp to string safely
                     if isinstance(row['timestamp'], pd.Timestamp):
@@ -108,13 +141,13 @@ def visualize_robust(data_df, save_path="user_location_visualization.html"):
                         <b>Device ID:</b> {device_id}<br>
                         <b>Timestamp:</b> {time_str}<br>
                         <b>Coordinates:</b> [{lat:.5f}, {lon:.5f}]<br>
-                        <b>Anomaly:</b> {'Yes' if row['is_anomalous'] else 'No'}<br>
-                        <b>Anomaly Score:</b> {float(row['anomaly_score']):.4f}
+                        <b>Anomaly:</b> {'Yes' if row.get('is_anomalous', False) else 'No'}<br>
+                        <b>Anomaly Score:</b> {float(row.get('anomaly_score', 0.0)):.4f}
                     </div>
                     """
                     
                     # Create marker
-                    if row['is_anomalous']:
+                    if row.get('is_anomalous', False):
                         icon = folium.Icon(color='red', icon='exclamation-circle', prefix='fa')
                     else:
                         icon = folium.Icon(color='blue', icon='user', prefix='fa')
@@ -123,11 +156,11 @@ def visualize_robust(data_df, save_path="user_location_visualization.html"):
                         location=[lat, lon],
                         popup=folium.Popup(popup_content, max_width=300),
                         icon=icon,
-                        tooltip=f"{'Anomaly' if row['is_anomalous'] else 'Standard'}: User {user_id}"
+                        tooltip=f"{'Anomaly' if row.get('is_anomalous', False) else 'Standard'}: User {user_id}"
                     )
                     
                     # Add to appropriate cluster
-                    if row['is_anomalous']:
+                    if row.get('is_anomalous', False):
                         marker.add_to(anomaly_cluster)
                     else:
                         marker.add_to(standard_cluster)
@@ -144,36 +177,46 @@ def visualize_robust(data_df, save_path="user_location_visualization.html"):
             logger.error(f"Error processing data points: {e}")
             # Continue with whatever markers were added
         
-        # Add heatmap for anomaly scores
-        try:
-            # Create heatmap data safely
-            heatmap_data = []
-            for idx, row in data_df.iterrows():
-                try:
-                    lat = float(row['latitude'])
-                    lon = float(row['longitude'])
-                    score = float(row['anomaly_score']) * 10  # Scale for visibility
-                    heatmap_data.append([lat, lon, score])
-                except Exception as e:
-                    logger.warning(f"Error processing heatmap point {idx}: {e}")
-                    continue
-            
-            # Add heatmap to map
-            if heatmap_data:
-                heatmap = HeatMap(
-                    heatmap_data,
-                    name="Anomaly Heatmap",
-                    show=False,
-                    radius=15,
-                    gradient={0.1: 'blue', 0.3: 'lime', 0.5: 'yellow', 0.7: 'orange', 1: 'red'},
-                    min_opacity=0.5,
-                    max_zoom=1
-                )
-                m.add_child(heatmap)
-                logger.info(f"Added heatmap with {len(heatmap_data)} points")
-        except Exception as e:
-            logger.error(f"Error adding heatmap: {e}")
-            # Continue without heatmap
+        # Add heatmap for anomaly scores - only if we have valid data
+        if markers_added > 0:
+            try:
+                # Create heatmap data safely
+                heatmap_data = []
+                for idx, row in data_df.iterrows():
+                    try:
+                        # Skip invalid coordinates
+                        if pd.isna(row['latitude']) or pd.isna(row['longitude']):
+                            continue
+                            
+                        lat = float(row['latitude'])
+                        lon = float(row['longitude'])
+                        
+                        # Check for valid coordinate range
+                        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                            continue
+                            
+                        score = float(row.get('anomaly_score', 0.0)) * 10  # Scale for visibility
+                        heatmap_data.append([lat, lon, score])
+                    except Exception as e:
+                        logger.warning(f"Error processing heatmap point {idx}: {e}")
+                        continue
+                
+                # Add heatmap to map
+                if heatmap_data:
+                    heatmap = HeatMap(
+                        heatmap_data,
+                        name="Anomaly Heatmap",
+                        show=False,
+                        radius=15,
+                        gradient={0.1: 'blue', 0.3: 'lime', 0.5: 'yellow', 0.7: 'orange', 1: 'red'},
+                        min_opacity=0.5,
+                        max_zoom=1
+                    )
+                    m.add_child(heatmap)
+                    logger.info(f"Added heatmap with {len(heatmap_data)} points")
+            except Exception as e:
+                logger.error(f"Error adding heatmap: {e}")
+                # Continue without heatmap
         
         # Add layer control
         try:
@@ -212,6 +255,12 @@ def visualize_robust(data_df, save_path="user_location_visualization.html"):
         
         # Save map - critical step
         try:
+            # Get directory and ensure it exists
+            save_dir = os.path.dirname(os.path.abspath(save_path))
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+                logger.info(f"Created directory: {save_dir}")
+                
             m.save(save_path)
             logger.info(f"Map saved successfully to {save_path}")
             
@@ -231,6 +280,7 @@ def visualize_robust(data_df, save_path="user_location_visualization.html"):
                 alt_path = os.path.join(os.path.expanduser("~"), "anomaly_map_fallback.html")
                 m.save(alt_path)
                 logger.info(f"Map saved to alternate location: {alt_path}")
+                return m, alt_path  # Return both the map and the alternate path
             except Exception as e2:
                 logger.error(f"Failed to save to alternate location: {e2}")
                 # As a last resort, return the map object without saving
