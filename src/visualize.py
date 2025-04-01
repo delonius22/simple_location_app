@@ -4,6 +4,7 @@ from folium.plugins import TimestampedGeoJson,MarkerCluster, HeatMap
 import os
 import logging
 import traceback
+import numpy as np
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -413,8 +414,33 @@ def visualize_user_locations(data_df, save_path='user_locations.html'):
 # Example usage
 if __name__ == "__main__":
     # Create sample data for demonstration
-    sample_data = create_sample_data()
+    # Generate sample data
+    np.random.seed(42)
+    n = 100
     
-    # Visualize the data
-    visualize_user_locations(sample_data, "user_location_visualization.html")
+    data = pd.DataFrame({
+        'user_id': np.repeat(['user1', 'user2'], n//2),
+        'timestamp': pd.date_range(start='2023-01-01', periods=n, freq='6H'),
+        'latitude': np.random.uniform(40.7, 40.8, n),  # NYC area
+        'longitude': np.random.uniform(-74.05, -73.95, n),
+        'device_id': np.random.choice(['device1', 'device2', 'device3'], n),
+        'is_anomalous': np.random.choice([True, False], n, p=[0.1, 0.9]),
+    })
+    
+    # Add anomaly scores
+    data['anomaly_score'] = np.where(data['is_anomalous'], 
+                                    np.random.uniform(0.7, 1.0, n),
+                                    np.random.uniform(0.0, 0.3, n))
+    
+    # Create visualization
+    try:
+        result = visualize_user_locations(data)
+        if result:
+            print("Test completed! Check the generated HTML file.")
+        else:
+            print("Test failed! No visualization was created.")
+    except Exception as e:
+        print(f"Error during test: {e}")
+        traceback.print_exc()
+    # visualize_user_locations(sample_data, "user_location_visualization.html")
     
