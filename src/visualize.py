@@ -197,7 +197,7 @@ def visualize_user_locations(data_df, save_path='user_locations.html'):
                     score = float(row.get('anomaly_score', 0.0))
                     
                     # Add to heatmap data (just coordinates and weight, no popups)
-                    heatmap_data.append([lat, lon, score * 10])  # Scale score for visibility
+                    heatmap_data.append([zip(lat, lon), score * 10])  # Scale score for visibility
                     
                 except Exception as e:
                     continue  # Skip problem rows
