@@ -1,22 +1,22 @@
-# visualization_with_trajectories.py
+# visualization_with_folium_search.py
 
 import folium
-from folium.plugins import MarkerCluster, HeatMap, TimestampedGeoJson
+from folium.plugins import MarkerCluster, HeatMap, TimestampedGeoJson, Search
 import pandas as pd
 import numpy as np
 import os
 import logging
 import traceback
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-def visualize_with_trajectories(data_df, save_path="user_locations_with_trajectories.html"):
-    """Create a visualization with user search functionality and trajectory lines."""
-    logger.info("Starting visualization process with search capability and trajectories")
+def visualize_with_folium_search(data_df, save_path="user_locations_search.html"):
+    """Create a visualization with Folium's built-in search functionality."""
+    logger.info("Starting visualization process with Folium search plugin")
     
     try:
         # Initial data validation
@@ -84,75 +84,99 @@ def visualize_with_trajectories(data_df, save_path="user_locations_with_trajecto
                      zoom_start=10, 
                      tiles='CartoDB positron')
         
-        # Get unique user IDs
-        unique_users = sorted(data_df['user_id'].unique())
+        # Create feature groups for different views
+        all_markers_fg = folium.FeatureGroup(name="All Logins")
+        anomaly_fg = folium.FeatureGroup(name="Anomalies Only")
+        heatmap_fg = folium.FeatureGroup(name="Heatmap")
         
-        # Create feature groups for each user ID
-        user_groups = {}
-        for user_id in unique_users:
-            user_groups[user_id] = folium.FeatureGroup(name=f"User: {user_id}", show=False)
-            m.add_child(user_groups[user_id])
+        # Dictionary to store user-specific feature groups
+        user_fgs = {}
         
-        # Create general feature groups
-        all_markers = folium.FeatureGroup(name="All Logins", show=True)
-        anomaly_markers = folium.FeatureGroup(name="Anomalies Only", show=False)
-        heatmap_layer = folium.FeatureGroup(name="Heatmap", show=True)
+        # GeoJSON data for search plugin
+        geojson_data = {
+            "type": "FeatureCollection",
+            "features": []
+        }
         
-        # Add markers for each data point
-        normal_count = 0
-        anomaly_count = 0
-        
+        # Process data points
         for idx, row in data_df.iterrows():
             try:
-                # Get coordinates
+                # Validate coordinates
                 lat = float(row['latitude'])
                 lon = float(row['longitude'])
                 
-                # Get user ID
-                user_id = str(row['user_id'])
+                # Skip invalid coordinates
+                if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                    continue
                 
-                # Format timestamp
+                # Get user ID and format timestamp
+                user_id = str(row['user_id'])
+                device_id = str(row['device_id'])
+                is_anomaly = bool(row.get('is_anomalous', False))
+                
                 if isinstance(row['timestamp'], pd.Timestamp):
                     time_str = row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
                 else:
                     time_str = str(row['timestamp'])
                 
                 # Create popup content
-                popup_html = f"""
+                popup_content = f"""
                 <div style="font-family: sans-serif; width: 200px;">
                     <h4 style="margin-bottom: 10px;">User Login Details</h4>
                     <b>User ID:</b> {user_id}<br>
-                    <b>Device:</b> {row['device_id']}<br>
-                    <b>Time:</b> {time_str}<br>
+                    <b>Device ID:</b> {device_id}<br>
+                    <b>Timestamp:</b> {time_str}<br>
                     <b>Coordinates:</b> [{lat:.5f}, {lon:.5f}]<br>
-                    <b>Anomaly:</b> {'Yes' if row.get('is_anomalous', False) else 'No'}<br>
-                    <b>Score:</b> {float(row.get('anomaly_score', 0.0)):.4f}
+                    <b>Anomaly:</b> {'Yes' if is_anomaly else 'No'}<br>
+                    <b>Anomaly Score:</b> {float(row.get('anomaly_score', 0.0)):.4f}
                 </div>
                 """
                 
-                # Create marker with appropriate styling
-                is_anomaly = bool(row.get('is_anomalous', False))
-                
+                # Create marker with appropriate icon
                 if is_anomaly:
                     icon = folium.Icon(color='red', icon='exclamation-circle', prefix='fa')
-                    anomaly_count += 1
                 else:
                     icon = folium.Icon(color='blue', icon='user', prefix='fa')
-                    normal_count += 1
                 
                 marker = folium.Marker(
                     location=[lat, lon],
-                    popup=folium.Popup(popup_html, max_width=300),
+                    popup=folium.Popup(popup_content, max_width=300),
                     icon=icon,
                     tooltip=f"{'Anomaly' if is_anomaly else 'Normal'}: User {user_id}"
                 )
                 
-                # Add to appropriate groups
-                marker.add_to(user_groups[user_id])  # User-specific group
-                marker.add_to(all_markers)  # All markers group
+                # Add to all markers group
+                marker.add_to(all_markers_fg)
                 
+                # Add to anomaly group if applicable
                 if is_anomaly:
-                    marker.add_to(anomaly_markers)  # Anomaly group
+                    marker.add_to(anomaly_fg)
+                
+                # Get or create user-specific feature group
+                if user_id not in user_fgs:
+                    user_fgs[user_id] = folium.FeatureGroup(name=f"User: {user_id}")
+                
+                # Add to user-specific group
+                marker.add_to(user_fgs[user_id])
+                
+                # Create GeoJSON feature for this point (for search functionality)
+                geojson_feature = {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [lon, lat]
+                    },
+                    "properties": {
+                        "user_id": user_id,
+                        "device_id": device_id,
+                        "timestamp": time_str,
+                        "is_anomalous": "Yes" if is_anomaly else "No",
+                        "anomaly_score": float(row.get('anomaly_score', 0.0)),
+                        "name": f"User: {user_id}"  # Important for search plugin
+                    }
+                }
+                
+                geojson_data["features"].append(geojson_feature)
                 
             except Exception as e:
                 logger.warning(f"Error processing row {idx}: {e}")
@@ -161,103 +185,96 @@ def visualize_with_trajectories(data_df, save_path="user_locations_with_trajecto
         # Add heatmap
         try:
             heatmap_data = []
+            
             for _, row in data_df.iterrows():
                 try:
                     lat = float(row['latitude'])
                     lon = float(row['longitude'])
-                    score = float(row.get('anomaly_score', 0.0))
                     
-                    # Scale the weight by anomaly score
-                    weight = score * 10
+                    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                        continue
+                        
+                    score = float(row.get('anomaly_score', 0.0))
+                    weight = score * 10  # Scale for visibility
+                    
                     heatmap_data.append([lat, lon, weight])
                 except:
                     continue
             
-            HeatMap(
-                data=heatmap_data,
-                radius=15,
-                gradient={0.1: 'blue', 0.3: 'lime', 0.5: 'yellow', 0.7: 'orange', 1: 'red'},
-                min_opacity=0.5,
-                max_zoom=1
-            ).add_to(heatmap_layer)
+            # Add heatmap to its feature group
+            if heatmap_data:
+                HeatMap(
+                    data=heatmap_data,
+                    radius=15,
+                    gradient={0.1: 'blue', 0.3: 'lime', 0.5: 'yellow', 0.7: 'orange', 1: 'red'},
+                    min_opacity=0.5,
+                    max_zoom=1
+                ).add_to(heatmap_fg)
         except Exception as e:
             logger.error(f"Error creating heatmap: {e}")
         
-        # Add general feature groups to map
-        m.add_child(all_markers)
-        m.add_child(anomaly_markers)
-        m.add_child(heatmap_layer)
-        
-        # Create TimestampedGeoJson features for each user
-        timestamped_features = {}
-        
-        for user_id in unique_users:
-            # Filter data for this user
-            user_data = data_df[data_df['user_id'] == user_id].sort_values('timestamp')
-            
-            # Skip if not enough data points
-            if len(user_data) < 2:
-                continue
+        # Add time-based visualization with trajectory lines
+        try:
+            # Process each user for time-based visualization
+            for user_id, user_fg in user_fgs.items():
+                # Filter data for this user
+                user_data = data_df[data_df['user_id'] == user_id].sort_values('timestamp')
                 
-            features = []
-            
-            # Create point features
-            for idx, row in user_data.iterrows():
-                try:
-                    # Skip invalid coordinates
-                    if (pd.isna(row['latitude']) or pd.isna(row['longitude']) or 
-                        not (-90 <= float(row['latitude']) <= 90) or 
-                        not (-180 <= float(row['longitude']) <= 180)):
-                        continue
-                    
-                    # Extract properties
-                    lat = float(row['latitude'])
-                    lon = float(row['longitude'])
-                    device_id = str(row['device_id'])
-                    is_anomaly = bool(row.get('is_anomalous', False))
-                    anomaly_score = float(row.get('anomaly_score', 0.0))
-                    
-                    # Format timestamp
-                    if isinstance(row['timestamp'], pd.Timestamp):
-                        time_str = row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
-                    else:
-                        time_str = str(row['timestamp'])
-                    
-                    # Create point feature
-                    point_feature = {
-                        'type': 'Feature',
-                        'geometry': {
-                            'type': 'Point',
-                            'coordinates': [lon, lat]  # GeoJSON uses [lon, lat] order
-                        },
-                        'properties': {
-                            'time': time_str,
-                            'icon': 'circle',
-                            'iconstyle': {
-                                'fillColor': 'red' if is_anomaly else 'blue',
-                                'fillOpacity': 0.8,
-                                'stroke': 'true',
-                                'radius': 8 if is_anomaly else 5
-                            },
-                            'style': {'weight': 0},
-                            'popup': f"User: {user_id}<br>Device: {device_id}<br>Time: {time_str}<br>Anomaly: {'Yes' if is_anomaly else 'No'}<br>Score: {anomaly_score:.4f}"
-                        }
-                    }
-                    
-                    features.append(point_feature)
-                    
-                except Exception as e:
-                    logger.warning(f"Error processing time feature for row {idx}: {e}")
+                # Skip if too few points
+                if len(user_data) < 2:
                     continue
-            
-            # Create line features (trajectories) connecting consecutive points
-            if len(features) >= 2:
+                
+                # Create features for TimestampedGeoJson
+                features = []
+                
+                # Add point features
+                for idx, row in user_data.iterrows():
+                    try:
+                        # Skip invalid coordinates
+                        lat = float(row['latitude'])
+                        lon = float(row['longitude'])
+                        
+                        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                            continue
+                        
+                        # Format timestamp
+                        if isinstance(row['timestamp'], pd.Timestamp):
+                            time_str = row['timestamp'].strftime('%Y-%m-%d %H:%M:%S')
+                        else:
+                            time_str = str(row['timestamp'])
+                        
+                        # Create point feature
+                        point_feature = {
+                            'type': 'Feature',
+                            'geometry': {
+                                'type': 'Point',
+                                'coordinates': [lon, lat]
+                            },
+                            'properties': {
+                                'time': time_str,
+                                'icon': 'circle',
+                                'iconstyle': {
+                                    'fillColor': 'red' if row.get('is_anomalous', False) else 'blue',
+                                    'fillOpacity': 0.8,
+                                    'stroke': 'true',
+                                    'radius': 8 if row.get('is_anomalous', False) else 5
+                                },
+                                'popup': f"User: {user_id}<br>Time: {time_str}<br>Device: {row['device_id']}"
+                            }
+                        }
+                        
+                        features.append(point_feature)
+                        
+                    except Exception as e:
+                        logger.warning(f"Error creating point feature: {e}")
+                        continue
+                
+                # Add line features (trajectories)
                 for i in range(len(features) - 1):
                     try:
                         point1 = features[i]['geometry']['coordinates']
                         point2 = features[i+1]['geometry']['coordinates']
                         time1 = features[i]['properties']['time']
-                        time2 = features[i+1]['properties']['time']
                         
                         # Create line feature
                         line_feature = {
@@ -267,13 +284,12 @@ def visualize_with_trajectories(data_df, save_path="user_locations_with_trajecto
                                 'coordinates': [point1, point2]
                             },
                             'properties': {
-                                'time': time1,  # Use time of first point
+                                'time': time1,
                                 'style': {
                                     'color': '#3388ff',
                                     'weight': 3,
                                     'opacity': 0.8
-                                },
-                                'popup': f"User: {user_id}<br>From: {time1}<br>To: {time2}"
+                                }
                             }
                         }
                         
@@ -282,343 +298,132 @@ def visualize_with_trajectories(data_df, save_path="user_locations_with_trajecto
                     except Exception as e:
                         logger.warning(f"Error creating line feature: {e}")
                         continue
+                
+                # Create TimestampedGeoJson for this user
+                if features:
+                    # Determine appropriate time settings
+                    time_range = user_data['timestamp'].max() - user_data['timestamp'].min()
+                    
+                    if time_range.days > 30:
+                        period = 'P1D'  # 1 day
+                        duration = 'P5D'  # 5 days
+                    elif time_range.days > 7:
+                        period = 'PT12H'  # 12 hours
+                        duration = 'P1D'  # 1 day
+                    elif time_range.days > 1:
+                        period = 'PT3H'  # 3 hours
+                        duration = 'PT12H'  # 12 hours
+                    else:
+                        period = 'PT30M'  # 30 minutes
+                        duration = 'PT3H'  # 3 hours
+                    
+                    # Create a separate feature group for the time animation
+                    time_fg = folium.FeatureGroup(name=f"Time Animation: {user_id}")
+                    
+                    # Add TimestampedGeoJson to the time feature group
+                    TimestampedGeoJson(
+                        {
+                            'type': 'FeatureCollection',
+                            'features': features
+                        },
+                        period=period,
+                        duration=duration,
+                        auto_play=False,
+                        loop=False,
+                        max_speed=10,
+                        date_options='YYYY-MM-DD HH:mm:ss',
+                        time_slider_drag_update=True
+                    ).add_to(time_fg)
+                    
+                    # Add the time feature group to the map
+                    time_fg.add_to(m)
             
-            # Store features for this user
-            if features:
-                timestamped_features[user_id] = features
-        
-        # Add TimestampedGeoJson for all users combined (initially hidden)
-        try:
-            # Combine all features
-            all_features = []
-            for user_features in timestamped_features.values():
-                all_features.extend(user_features)
-            
-            if all_features:
-                # Determine time range
-                all_timestamps = [
-                    datetime.strptime(feature['properties']['time'], '%Y-%m-%d %H:%M:%S')
-                    for feature in all_features
-                    if 'time' in feature['properties']
-                ]
-                
-                start_time = min(all_timestamps)
-                end_time = max(all_timestamps)
-                time_range = end_time - start_time
-                
-                # Set appropriate period and duration
-                if time_range.days > 30:
-                    period = 'P1D'  # 1 day
-                    duration = 'P5D'  # 5 days
-                elif time_range.days > 7:
-                    period = 'PT12H'  # 12 hours
-                    duration = 'P1D'  # 1 day
-                elif time_range.days > 1:
-                    period = 'PT3H'  # 3 hours
-                    duration = 'PT12H'  # 12 hours
-                else:
-                    period = 'PT30M'  # 30 minutes
-                    duration = 'PT3H'  # 3 hours
-                
-                # Create TimestampedGeoJson for all users
-                all_time_slider = TimestampedGeoJson(
-                    {
-                        'type': 'FeatureCollection',
-                        'features': all_features
-                    },
-                    period=period,
-                    duration=duration,
-                    auto_play=False,
-                    loop=False,
-                    max_speed=10,
-                    loop_button=True,
-                    date_options='YYYY-MM-DD HH:mm:ss',
-                    time_slider_drag_update=True,
-                    add_last_point=True
-                )
-                
-                # Create a feature group for the time slider
-                time_slider_group = folium.FeatureGroup(name="Time Animation (All Users)", show=False)
-                all_time_slider.add_to(time_slider_group)
-                time_slider_group.add_to(m)
-                
-                logger.info(f"Added TimestampedGeoJson with {len(all_features)} features")
-                
-                # Create individual time sliders for each user
-                for user_id, features in timestamped_features.items():
-                    if features:
-                        user_time_slider = TimestampedGeoJson(
-                            {
-                                'type': 'FeatureCollection',
-                                'features': features
-                            },
-                            period=period,
-                            duration=duration,
-                            auto_play=False,
-                            loop=False,
-                            max_speed=10,
-                            loop_button=True,
-                            date_options='YYYY-MM-DD HH:mm:ss',
-                            time_slider_drag_update=True,
-                            add_last_point=True
-                        )
-                        
-                        # Create a feature group for this user's time slider
-                        user_time_group = folium.FeatureGroup(name=f"Time Animation: {user_id}", show=False)
-                        user_time_slider.add_to(user_time_group)
-                        user_time_group.add_to(m)
-                        
-                        logger.info(f"Added TimestampedGeoJson for user {user_id} with {len(features)} features")
-            else:
-                logger.warning("No valid features for TimestampedGeoJson")
-                
         except Exception as e:
-            logger.error(f"Error adding TimestampedGeoJson: {e}")
+            logger.error(f"Error creating time-based visualization: {e}")
             logger.error(traceback.format_exc())
-            # Continue without time slider
         
-        # Create search interface
-        search_html = f"""
-        <div id="search-container" style="position: fixed; 
-                                        top: 10px; 
-                                        left: 60px; 
-                                        z-index: 1000; 
-                                        background-color: white; 
-                                        padding: 10px; 
-                                        border-radius: 4px; 
-                                        box-shadow: 0 1px 5px rgba(0,0,0,0.4);">
-            <div style="margin-bottom: 8px; font-weight: bold; color: #444;">
-                Search by User ID
-            </div>
-            <div style="display: flex; align-items: center; margin-bottom: 8px;">
-                <input type="text" id="user-search" placeholder="Enter user ID..." 
-                    style="padding: 6px; 
-                          border: 1px solid #ccc; 
-                          border-radius: 4px; 
-                          margin-right: 5px; 
-                          width: 150px;"/>
-                <button onclick="searchUser()" 
-                    style="padding: 6px 10px; 
-                          background-color: #4CAF50; 
-                          color: white; 
-                          border: none; 
-                          border-radius: 4px; 
-                          cursor: pointer;">
-                    Search
-                </button>
-            </div>
-            <div style="margin-bottom: 8px;">
-                <span style="font-size: 13px;">Available Users:</span>
-                <select id="user-dropdown" onchange="selectUser(this.value)" 
-                    style="padding: 6px; 
-                          border: 1px solid #ccc; 
-                          border-radius: 4px; 
-                          width: 100%; 
-                          margin-top: 4px;">
-                    <option value="">-- Select User --</option>
-                    {' '.join([f'<option value="{uid}">{uid}</option>' for uid in unique_users])}
-                </select>
-            </div>
-            <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
-                <button onclick="showTrajectory()" 
-                    style="padding: 6px 10px; 
-                          background-color: #2196F3; 
-                          color: white; 
-                          border: none; 
-                          border-radius: 4px; 
-                          cursor: pointer;
-                          flex: 1;
-                          margin-right: 5px;">
-                    Show Trajectory
-                </button>
-                <button onclick="resetView()" 
-                    style="padding: 6px 10px; 
-                          background-color: #f44336; 
-                          color: white; 
-                          border: none; 
-                          border-radius: 4px; 
-                          cursor: pointer;
-                          flex: 1;">
-                    Reset View
-                </button>
-            </div>
-            <div style="margin-top: 8px; font-size: 12px; color: #666;">
-                <div><b>Total Points:</b> {len(data_df)}</div>
-                <div><b>Normal:</b> {normal_count}</div>
-                <div><b>Anomalies:</b> {anomaly_count}</div>
-                <div><b>Time Period:</b> {data_df['timestamp'].min().strftime('%Y-%m-%d')} to {data_df['timestamp'].max().strftime('%Y-%m-%d')}</div>
-            </div>
-        </div>
-        """
+        # Add all feature groups to the map
+        all_markers_fg.add_to(m)
+        heatmap_fg.add_to(m)
+        anomaly_fg.add_to(m)
         
-        # Create JavaScript for search and trajectory functionality
-        search_js = """
-        <script>
-        var currentUserId = null;
+        for user_fg in user_fgs.values():
+            user_fg.add_to(m)
         
-        function searchUser() {
-            var userId = document.getElementById('user-search').value.trim();
-            if (!userId) {
-                alert("Please enter a user ID");
-                return;
-            }
+        # Add Search plugin using GeoJSON data
+        try:
+            search = Search(
+                layer=all_markers_fg,
+                geom_type="Point",
+                placeholder="Search for users...",
+                collapsed=False,
+                search_label="user_id",  # Search by user_id property
+                search_zoom=15,
+                position='topleft'
+            )
             
-            currentUserId = userId;
-            
-            // Find the user layer in the layer control
-            var found = false;
-            var layerControl = document.getElementsByClassName('leaflet-control-layers-overlays')[0];
-            var inputs = layerControl.getElementsByTagName('input');
-            var labels = layerControl.getElementsByTagName('span');
-            
-            // Hide all layers first
-            for (var i = 0; i < inputs.length; i++) {
-                var labelText = labels[i].textContent.trim();
-                inputs[i].checked = false;
-                
-                // Show only the searched user's layer
-                if (labelText === 'User: ' + userId) {
-                    inputs[i].checked = true;
-                    found = true;
-                }
-                
-                // Trigger change event
-                var event = new Event('change');
-                inputs[i].dispatchEvent(event);
-            }
-            
-            if (!found) {
-                alert("User ID not found: " + userId);
-                resetView();
-            } else {
-                // Update dropdown to match
-                document.getElementById('user-dropdown').value = userId;
-            }
-        }
+            m.add_child(search)
+            logger.info("Added search plugin")
+        except Exception as e:
+            logger.error(f"Error adding search plugin: {e}")
+            logger.error(traceback.format_exc())
         
-        function showTrajectory() {
-            if (!currentUserId) {
-                alert("Please select a user first");
-                return;
-            }
-            
-            var userId = currentUserId;
-            var layerControl = document.getElementsByClassName('leaflet-control-layers-overlays')[0];
-            var inputs = layerControl.getElementsByTagName('input');
-            var labels = layerControl.getElementsByTagName('span');
-            
-            // Show only the selected user's time animation layer
-            for (var i = 0; i < inputs.length; i++) {
-                var labelText = labels[i].textContent.trim();
-                
-                // Hide all layers
-                inputs[i].checked = false;
-                
-                // Show only the time animation for the selected user
-                if (labelText === 'Time Animation: ' + userId) {
-                    inputs[i].checked = true;
-                    
-                    // Trigger the change event
-                    var event = new Event('change');
-                    inputs[i].dispatchEvent(event);
-                    
-                    // Find and click the play button (after a short delay to ensure layer is visible)
-                    setTimeout(function() {
-                        var playButton = document.querySelector('.timecontrol-play');
-                        if (playButton) {
-                            playButton.click();
-                        }
-                    }, 300);
-                }
-            }
-        }
-        
-        function selectUser(userId) {
-            if (userId) {
-                document.getElementById('user-search').value = userId;
-                searchUser();
-            } else {
-                resetView();
-            }
-        }
-        
-        function resetView() {
-            // Clear the search field and dropdown
-            document.getElementById('user-search').value = "";
-            document.getElementById('user-dropdown').value = "";
-            currentUserId = null;
-            
-            // Show only the default layers
-            var layerControl = document.getElementsByClassName('leaflet-control-layers-overlays')[0];
-            var inputs = layerControl.getElementsByTagName('input');
-            var labels = layerControl.getElementsByTagName('span');
-            
-            for (var i = 0; i < inputs.length; i++) {
-                var labelText = labels[i].textContent.trim();
-                
-                // Reset all layer visibility
-                if (labelText === 'All Logins' || labelText === 'Heatmap') {
-                    inputs[i].checked = true;
-                } else {
-                    inputs[i].checked = false;
-                }
-                
-                // Trigger change event
-                var event = new Event('change');
-                inputs[i].dispatchEvent(event);
-            }
-        }
-        
-        // Initialize with default view
-        window.onload = function() {
-            // Short delay to ensure map is fully loaded
-            setTimeout(resetView, 500);
-        };
-        </script>
-        """
-        
-        # Add search interface and functionality to map
-        m.get_root().html.add_child(folium.Element(search_html))
-        m.get_root().html.add_child(folium.Element(search_js))
+        # Add layer control
+        folium.LayerControl(position='topright').add_to(m)
         
         # Add legend
         legend_html = """
         <div style="position: fixed; 
                    bottom: 50px; right: 50px; 
-                   width: 200px; 
-                   border:2px solid grey; z-index:9999; 
-                   font-size:14px;
+                   width: 180px; height: 160px; 
+                   border: 2px solid grey; z-index: 9999; 
+                   font-size: 14px;
                    background-color: white; 
                    padding: 10px;
                    border-radius: 5px;">
-            <p style="margin-top: 0;"><b>Legend</b></p>
-            <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                <i class="fa fa-user fa-1x" style="color:blue; margin-right: 8px;"></i>
-                <span>Normal Login</span>
+            <p style="margin-top: 0;"><b>Login Legend</b></p>
+            <div>
+                <i class="fa fa-user fa-1x" style="color:blue"></i>
+                <span style="padding-left:5px;">Standard Login</span>
             </div>
-            <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                <i class="fa fa-exclamation-circle fa-1x" style="color:red; margin-right: 8px;"></i>
-                <span>Anomalous Login</span>
+            <div style="margin-top: 5px;">
+                <i class="fa fa-exclamation-circle fa-1x" style="color:red"></i>
+                <span style="padding-left:5px;">Anomalous Login</span>
             </div>
-            <div style="margin-top: 5px; display: flex; align-items: center; margin-bottom: 5px;">
-                <div style="height: 10px; width: 50px; background: linear-gradient(to right, blue, lime, yellow, orange, red); display: inline-block; margin-right: 8px;"></div>
-                <span>Anomaly Score</span>
+            <div style="margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
+                <div style="height: 10px; width: 25px; background: linear-gradient(to right, blue, lime, yellow, orange, red); display: inline-block;"></div>
+                <span style="vertical-align: middle; margin-left: 5px;">Anomaly Score</span>
             </div>
-            <div style="display: flex; align-items: center; margin-bottom: 5px;">
-                <div style="width: 20px; height: 3px; background-color: #3388ff; margin-right: 8px;"></div>
-                <span>User Trajectory</span>
-            </div>
-            <div style="font-size: 12px; margin-top: 5px; border-top: 1px solid #ccc; padding-top: 5px;">
-                <div>Use "Show Trajectory" to view a user's movement pattern over time</div>
+            <div style="margin-top: 5px;">
+                <div style="width: 25px; height: 3px; background-color: #3388ff; display: inline-block;"></div>
+                <span style="vertical-align: middle; margin-left: 5px;">User Path</span>
             </div>
         </div>
         """
         m.get_root().html.add_child(folium.Element(legend_html))
         
-        # Add layer control
-        folium.LayerControl().add_to(m)
+        # Helper info about search
+        search_info_html = """
+        <div style="position: fixed; 
+                  top: 60px; left: 60px; 
+                  width: 240px; 
+                  border: 1px solid #ccc; 
+                  z-index: 9999; 
+                  font-size: 12px;
+                  background-color: white; 
+                  padding: 8px;
+                  border-radius: 4px;">
+            <p style="margin: 0 0 5px 0;"><b>Search Tips:</b></p>
+            <ul style="margin: 0; padding-left: 20px;">
+                <li>Type a user ID in the search box</li>
+                <li>Select "Time Animation: [user]" to see movement</li>
+                <li>Use the time slider controls to track movement</li>
+            </ul>
+        </div>
+        """
+        m.get_root().html.add_child(folium.Element(search_info_html))
         
-        # Save map
+        # Save the map
         try:
             # Create directory if it doesn't exist
             save_dir = os.path.dirname(os.path.abspath(save_path))
@@ -633,19 +438,21 @@ def visualize_with_trajectories(data_df, save_path="user_locations_with_trajecto
             else:
                 logger.error(f"Failed to save map to {save_path}")
                 return None
+                
         except Exception as e:
             logger.error(f"Error saving map: {e}")
             logger.error(traceback.format_exc())
             
             # Try alternate location
             try:
-                alt_path = os.path.join(os.path.expanduser("~"), "user_trajectories_map.html")
+                alt_path = os.path.join(os.path.expanduser("~"), "anomaly_map_search.html")
                 m.save(alt_path)
                 logger.info(f"Map saved to alternate location: {alt_path}")
                 return m
-            except:
+            except Exception as e2:
+                logger.error(f"Failed to save to alternate location: {e2}")
                 return m  # Return unsaved map as last resort
-    
+                
     except Exception as e:
         logger.error(f"Unexpected error: {e}")
         logger.error(traceback.format_exc())
@@ -656,77 +463,29 @@ if __name__ == "__main__":
     np.random.seed(42)
     n = 100
     
-    # Generate test data for each user with realistic movement patterns
-    users = ['user1', 'user2', 'user3']
-    all_data = []
+    # Create sample data
+    data = pd.DataFrame({
+        'user_id': np.repeat(['user1', 'user2', 'user3', 'user4'], n//4),
+        'timestamp': pd.date_range(start='2023-01-01', periods=n, freq='6H'),
+        'latitude': np.random.uniform(40.7, 40.8, n),  # NYC area
+        'longitude': np.random.uniform(-74.05, -73.95, n),
+        'device_id': np.random.choice(['desktop', 'mobile', 'tablet'], n),
+        'is_anomalous': np.random.choice([True, False], n, p=[0.1, 0.9]),
+    })
     
-    for user_id in users:
-        # Create a base location for each user
-        if user_id == 'user1':
-            base_lat, base_lon = 37.7749, -122.4194  # San Francisco
-        elif user_id == 'user2':
-            base_lat, base_lon = 40.7128, -74.0060  # New York
+    # Add anomaly scores
+    data['anomaly_score'] = np.where(data['is_anomalous'], 
+                                   np.random.uniform(0.7, 1.0, n),
+                                   np.random.uniform(0.0, 0.3, n))
+    
+    # Create visualization
+    try:
+        result = visualize_with_folium_search(data)
+        
+        if result:
+            print("Test completed successfully")
         else:
-            base_lat, base_lon = 34.0522, -118.2437  # Los Angeles
-            
-        # Create sequential timestamps for this user
-        timestamps = pd.date_range(start='2023-01-01', periods=n//len(users), freq='3H')
-        
-        # Create trajectory - simulate a user moving between several locations
-        lats = []
-        lons = []
-        
-        # Create 3-5 common locations for this user
-        num_locations = np.random.randint(3, 6)
-        common_locs = []
-        
-        for _ in range(num_locations):
-            # Each location is within ~5km of the base
-            loc_lat = base_lat + np.random.normal(0, 0.05)
-            loc_lon = base_lon + np.random.normal(0, 0.05)
-            common_locs.append((loc_lat, loc_lon))
-        
-        # Assign each timestamp to one of the common locations
-        # with occasional random locations (potentially anomalous)
-        for i in range(len(timestamps)):
-            if np.random.random() < 0.1:  # 10% chance of a random location
-                lat = base_lat + np.random.normal(0, 0.2)  # Wider distribution
-                lon = base_lon + np.random.normal(0, 0.2)
-                is_anomaly = True
-            else:
-                # Pick a common location
-                loc_idx = np.random.randint(0, len(common_locs))
-                loc_lat, loc_lon = common_locs[loc_idx]
-                
-                # Add small random variation
-                lat = loc_lat + np.random.normal(0, 0.005)
-                lon = loc_lon + np.random.normal(0, 0.005)
-                is_anomaly = False
-            
-            lats.append(lat)
-            lons.append(lon)
-            
-            # Create a record
-            device_id = np.random.choice(['desktop', 'mobile', 'tablet'])
-            anomaly_score = np.random.uniform(0.7, 1.0) if is_anomaly else np.random.uniform(0.0, 0.3)
-            
-            all_data.append({
-                'user_id': user_id,
-                'timestamp': timestamps[i],
-                'latitude': lat,
-                'longitude': lon,
-                'device_id': device_id,
-                'is_anomalous': is_anomaly,
-                'anomaly_score': anomaly_score
-            })
-    
-    # Convert to DataFrame
-    data = pd.DataFrame(all_data)
-    
-    # Create test visualization
-    result = visualize_with_trajectories(data)
-    
-    if result:
-        print("Test completed successfully")
-    else:
-        print("Test failed")
+            print("Test failed")
+    except Exception as e:
+        print(f"Error during test: {e}")
+        traceback.print_exc()
